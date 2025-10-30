@@ -1,0 +1,14 @@
+streamlit
+pandas
+numpy
+scikit-learn
+statsmodels
+matplotlib
+seaborn
+plotly
+fpdf
+streamlit-extras
+altair
+scipy
+openai
+langchain
