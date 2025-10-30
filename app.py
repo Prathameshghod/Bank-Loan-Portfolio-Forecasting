@@ -52,8 +52,7 @@ if menu == 'Home':
         st.write('Navigate using the sidebar.')
         st.markdown('---')
         st.success('''**Key modules:**\n- EDA: Data analysis\n- ARIMA Forecast: Loan trends\n- Default ML: Default Risk\n- Dashboard: Portfolio KPIs and exports''')
-    with c2:
-        st.image('https://img.freepik.com/free-vector/bank-loan-concept-illustration_114360-13212.jpg', width=450)
+    # Removed the image in c2
 
 # --- EDA ---
 if menu == 'EDA':
