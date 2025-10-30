@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import plotly.express as px
+import plotly.graph_objects as go
 from utils import load_data, clean_data, get_summary_stats, plot_corr_heatmap, plot_distribution, plot_time_trend, kpi_cards, encode_categoricals
 from models import arima_forecast, arima_diagnostics, logistic_regression_classification
 from reporting import export_csv, export_pdf
@@ -71,8 +72,14 @@ if menu == 'EDA':
     st.plotly_chart(plot_time_trend(df, 'Loan_Amount'), use_container_width=True)
     st.write('### NPA/Default Monthly Trend')
     try:
-        npa_trend = df.groupby(pd.to_datetime(df['Date_of_Issue']).dt.to_period('M'))['Loan_Status'].mean()
-        st.line_chart(npa_trend)
+        npa = df.copy()
+        npa['Date_of_Issue'] = pd.to_datetime(npa['Date_of_Issue'])
+        npa_trend = npa.groupby(pd.Grouper(key='Date_of_Issue', freq='M'))['Loan_Status'].mean().reset_index()
+        npa_trend['Default %'] = npa_trend['Loan_Status'] * 100
+        fig_npa = px.area(npa_trend, x='Date_of_Issue', y='Default %', template='plotly_dark', title='Default Ratio (%) by Month', color_discrete_sequence=['#6ab0de'])
+        fig_npa.update_traces(mode='lines+markers', line_width=3)
+        fig_npa.update_layout(yaxis_title='Default (%)', xaxis_title='Date', height=320, title=dict(x=0.5))
+        st.plotly_chart(fig_npa, use_container_width=True)
     except: st.warning("Can't plot NPA trend")
 
 # --- ARIMA FORECAST ---
@@ -91,8 +98,18 @@ if menu == 'ARIMA Forecasting':
         diag = arima_diagnostics(ts, resid)
         st.pyplot(diag)
         st.dataframe(forecast_df)
-        # Plot actual vs forecast
-        fig = px.line(x=list(ts.index)+list(forecast_df['Date']), y=list(ts.values)+list(forecast_df['Forecast']), labels={'x':'Date','y':target_col}, title=f'{target_col} Actual & Forecast')
+        # Enhanced Actual vs Forecast with CI band
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=ts.index, y=ts.values, mode='lines+markers', name='Actual', line=dict(color='#4da3ff', width=3)))
+        fig.add_trace(go.Scatter(x=forecast_df['Date'], y=forecast_df['Forecast'], mode='lines+markers', name='Forecast', line=dict(color='#f5b041', width=3, dash='dash')))
+        # Confidence interval band
+        fig.add_traces([
+            go.Scatter(x=forecast_df['Date'], y=forecast_df['Upper CI'], line=dict(width=0), showlegend=False, hoverinfo='skip'),
+            go.Scatter(x=forecast_df['Date'], y=forecast_df['Lower CI'], fill='tonexty', line=dict(width=0), name='95% CI', hoverinfo='skip', fillcolor='rgba(245,176,65,0.2)')
+        ])
+        fig.update_layout(template='plotly_dark', title=f'{target_col}: Actual vs Forecast', title_x=0.5, xaxis_title='Date', yaxis_title=target_col, height=420)
+        if target_col == 'Loan_Amount':
+            fig.update_yaxes(tickprefix='₹', separatethousands=True)
         st.plotly_chart(fig, use_container_width=True)
         st.download_button('Download Forecast (CSV)',forecast_df.to_csv(index=False),file_name='forecast.csv')
 
@@ -107,16 +124,24 @@ if menu == 'Default Prediction':
         sel_features = st.multiselect('Select Features', ml_cols, default=['Loan_Amount','Interest_Rate','Credit_Score','Income'])
         if sel_features:
             with st.spinner('Training ML model and calculating metrics...'):
-                model, cm, report, rocauc, fpr, tpr, importance, feat_names = logistic_regression_classification(df, sel_features, 'Loan_Status')
+                model, cm, report, rocauc, fpr, tpr, coef, feat_names, odds = logistic_regression_classification(df, sel_features, 'Loan_Status')
                 st.write('#### Confusion Matrix')
                 st.write(cm)
                 st.write('#### Classification Report')
                 st.json(report)
                 st.metric(label="ROC-AUC", value=f"{rocauc:.3f}")
-                st.line_chart(pd.DataFrame({'FPR':fpr, 'TPR':tpr}))
+                roc_fig = go.Figure()
+                roc_fig.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name='ROC', line=dict(color='#4da3ff', width=3)))
+                roc_fig.add_trace(go.Scatter(x=[0,1], y=[0,1], mode='lines', name='Random', line=dict(color='#aaaaaa', dash='dash')))
+                roc_fig.update_layout(template='plotly_dark', xaxis_title='False Positive Rate', yaxis_title='True Positive Rate', height=340, title='ROC Curve', title_x=0.5)
+                st.plotly_chart(roc_fig, use_container_width=True)
                 st.write('#### Feature Importance')
-                imp_df = pd.DataFrame({'Feature': feat_names, 'Importance': importance})
-                st.bar_chart(imp_df.set_index('Feature'))
+                imp_df = pd.DataFrame({'Feature': feat_names, 'Coefficient': coef, 'AbsCoef': np.abs(coef), 'OddsRatio': odds})
+                imp_df = imp_df.sort_values('AbsCoef', ascending=True)
+                colors = ['#e74c3c' if v < 0 else '#2ecc71' for v in imp_df['Coefficient']]
+                bar = go.Figure(go.Bar(x=imp_df['AbsCoef'], y=imp_df['Feature'], orientation='h', marker_color=colors, text=[f"coef={c:.3f}\nOR={o:.2f}" for c,o in zip(imp_df['Coefficient'], imp_df['OddsRatio'])], textposition='outside'))
+                bar.update_layout(template='plotly_dark', height=420, title='Standardized Coefficients (|coef|), color by sign', title_x=0.5, xaxis_title='|Coefficient|', yaxis_title='Feature', margin=dict(l=120, r=20, t=60, b=40))
+                st.plotly_chart(bar, use_container_width=True)
 # --- COMBINED DASHBOARD ---
 if menu == 'Combined Dashboard':
     st.title('📊 Loan Portfolio Overview Dashboard')
@@ -130,16 +155,33 @@ if menu == 'Combined Dashboard':
     st.write('### Portfolio Loan Amount Forecast')
     target_col = 'Loan_Amount' if 'Loan_Amount' in df else df.columns[df.select_dtypes(include=['float','int']).columns[0]]
     ts, forecast_df, _, _, _ = arima_forecast(df, target_col)
-    st.plotly_chart(px.line(x=list(ts.index)+list(forecast_df['Date']), y=list(ts.values)+list(forecast_df['Forecast']), labels={'x': 'Date', 'y': target_col}, title='Actual vs Forecast', color_discrete_sequence=['#40739e']), use_container_width=True)
+    fig_dash = go.Figure()
+    fig_dash.add_trace(go.Scatter(x=ts.index, y=ts.values, mode='lines+markers', name='Actual', line=dict(color='#4da3ff', width=3)))
+    fig_dash.add_trace(go.Scatter(x=forecast_df['Date'], y=forecast_df['Forecast'], mode='lines+markers', name='Forecast', line=dict(color='#f5b041', width=3, dash='dash')))
+    fig_dash.add_traces([
+        go.Scatter(x=forecast_df['Date'], y=forecast_df['Upper CI'], line=dict(width=0), showlegend=False, hoverinfo='skip'),
+        go.Scatter(x=forecast_df['Date'], y=forecast_df['Lower CI'], fill='tonexty', line=dict(width=0), name='95% CI', hoverinfo='skip', fillcolor='rgba(245,176,65,0.2)')
+    ])
+    fig_dash.update_layout(template='plotly_dark', title='Actual vs Forecast', title_x=0.5, xaxis_title='Date', yaxis_title=target_col, height=420)
+    fig_dash.update_yaxes(tickprefix='₹', separatethousands=True)
+    st.plotly_chart(fig_dash, use_container_width=True)
     st.write('### Default Feature Importance')
     try:
-        _,_,_,_,_,_,importance,feat_names = logistic_regression_classification(df, ['Loan_Amount','Credit_Score','Interest_Rate','Income'], 'Loan_Status')
-        st.bar_chart(pd.DataFrame({'Feature': feat_names, 'Importance': importance}).set_index('Feature'))
+        _,_,_,_,_,_,coef,feat_names,odds = logistic_regression_classification(df, ['Loan_Amount','Credit_Score','Interest_Rate','Income'], 'Loan_Status')
+        imp_df = pd.DataFrame({'Feature': feat_names, 'Coefficient': coef, 'AbsCoef': np.abs(coef), 'OddsRatio': odds}).sort_values('AbsCoef', ascending=True)
+        colors = ['#e74c3c' if v < 0 else '#2ecc71' for v in imp_df['Coefficient']]
+        st.plotly_chart(go.Figure(go.Bar(x=imp_df['AbsCoef'], y=imp_df['Feature'], orientation='h', marker_color=colors, text=[f"coef={c:.3f}\nOR={o:.2f}" for c,o in zip(imp_df['Coefficient'], imp_df['OddsRatio'])], textposition='outside')).update_layout(template='plotly_dark', height=360, title='Standardized Coefficients (|coef|), color by sign', title_x=0.5, xaxis_title='|Coefficient|', yaxis_title='Feature', margin=dict(l=120, r=20, t=60, b=40)), use_container_width=True)
     except: st.warning('Default ML could not run.')
     st.write('### NPA/Default Monthly Trend')
     try:
-        npa_trend = df.groupby(pd.to_datetime(df['Date_of_Issue']).dt.to_period('M'))['Loan_Status'].mean()
-        st.area_chart(npa_trend)
+        npa = df.copy()
+        npa['Date_of_Issue'] = pd.to_datetime(npa['Date_of_Issue'])
+        npa_trend = npa.groupby(pd.Grouper(key='Date_of_Issue', freq='M'))['Loan_Status'].mean().reset_index()
+        npa_trend['Default %'] = npa_trend['Loan_Status'] * 100
+        fig_npa2 = px.area(npa_trend, x='Date_of_Issue', y='Default %', template='plotly_dark', color_discrete_sequence=['#6ab0de'])
+        fig_npa2.update_traces(mode='lines+markers', line_width=3)
+        fig_npa2.update_layout(yaxis_title='Default (%)', xaxis_title='Date', height=320, title='Default Ratio (%) by Month', title_x=0.5)
+        st.plotly_chart(fig_npa2, use_container_width=True)
     except: pass
     st.divider()
     st.write('### Download Portfolio KPIs')

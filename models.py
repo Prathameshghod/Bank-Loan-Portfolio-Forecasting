@@ -3,6 +3,7 @@ import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import confusion_matrix, classification_report, roc_auc_score, roc_curve
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import warnings
 
@@ -65,19 +66,27 @@ def arima_diagnostics(ts, resid):
     return fig
 
 def logistic_regression_classification(df, features, target, test_size=0.25, random_state=42):
-    """Train/test a logistic regression default prediction model with selected features."""
+    """Train/test a logistic regression default prediction model with selected features.
+    - One-hot encode categoricals
+    - Standardize features for stable coefficients
+    - Use class_weight='balanced' for imbalanced targets
+    Returns model and evaluation artifacts plus coefficients and odds ratios.
+    """
     X = df[features]
     y = df[target]
-    # Handle categorical features if present
     X = pd.get_dummies(X, drop_first=True)
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=random_state)
-    model = LogisticRegression(max_iter=1000)
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
-    y_proba = model.predict_proba(X_test)[:,1]
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+    model = LogisticRegression(max_iter=2000, class_weight='balanced')
+    model.fit(X_train_scaled, y_train)
+    y_pred = model.predict(X_test_scaled)
+    y_proba = model.predict_proba(X_test_scaled)[:,1]
     cm = confusion_matrix(y_test, y_pred)
     report = classification_report(y_test, y_pred, output_dict=True)
     rocauc = roc_auc_score(y_test, y_proba)
     fpr, tpr, _ = roc_curve(y_test, y_proba)
-    importance = model.coef_[0]
-    return model, cm, report, rocauc, fpr, tpr, importance, X_train.columns
+    coef = model.coef_[0]
+    odds_ratio = np.exp(coef)
+    return model, cm, report, rocauc, fpr, tpr, coef, X_train.columns, odds_ratio
