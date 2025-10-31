@@ -113,3 +113,49 @@ def kpi_cards(df):
     avg_interest = df['Interest_Rate'].mean() if 'Interest_Rate' in df else 0
     default_ratio = df['Loan_Status'].mean()*100 if 'Loan_Status' in df else 0
     return total_loans, loan_growth, avg_interest, default_ratio
+
+def explain_time_series(df, x_col, y_col, title, percent=False, currency=False):
+	"""Generate a short, simple explanation for a time series chart, with its business use."""
+	try:
+		d = df[[x_col, y_col]].dropna().copy()
+		d[x_col] = pd.to_datetime(d[x_col])
+		d = d.sort_values(x_col)
+		start, end = d[x_col].min(), d[x_col].max()
+		start_s, end_s = start.strftime('%b %Y'), end.strftime('%b %Y')
+		y0, yN = float(d.iloc[0][y_col]), float(d.iloc[-1][y_col])
+		ymin_row = d.loc[d[y_col].idxmin()]
+		ymax_row = d.loc[d[y_col].idxmax()]
+		ymin_v, ymax_v = float(ymin_row[y_col]), float(ymax_row[y_col])
+		ymin_t, ymax_t = ymin_row[x_col].strftime('%b %Y'), ymax_row[x_col].strftime('%b %Y')
+		trend = 'increasing' if yN > y0 else ('decreasing' if yN < y0 else 'stable')
+		def fmt(v):
+			if percent:
+				return f"{v*100:.1f}%" if v <= 1.0 else f"{v:.1f}%"
+			if currency:
+				return f"₹{v:,.0f}"
+			return f"{v:,.2f}"
+		use_line = f"- Use: Track {y_col} over time to spot growth/decline, seasonality, and anomalies for planning and early alerts."
+		text = (
+			f"- Title: {title}\n"
+			f"- X-axis: Months ({start_s} → {end_s})\n"
+			f"- Y-axis: {y_col}{' (%)' if percent else ''}\n"
+			f"- Change: starts at {fmt(y0)}, ends at {fmt(yN)} — trend is {trend}.\n"
+			f"- Peak: {fmt(ymax_v)} in {ymax_t}; Lowest: {fmt(ymin_v)} in {ymin_t}.\n"
+			f"{use_line}"
+		)
+	except Exception:
+		text = f"- Title: {title}\n- Use: Time-series view to monitor trend and seasonality."
+	return text
+
+def explain_histogram(series, title):
+	s = pd.Series(series).dropna()
+	if s.empty:
+		return f"- Title: {title}\n- Use: Understand distribution; no data available."
+	mean_v, med_v = s.mean(), s.median()
+	p25, p75 = s.quantile(0.25), s.quantile(0.75)
+	return (
+		f"- Title: {title}\n"
+		f"- Center: mean ≈ {mean_v:,.2f}, median ≈ {med_v:,.2f}\n"
+		f"- Spread: 25th–75th percentile ≈ {p25:,.2f}–{p75:,.2f}\n"
+		f"- Use: Shows shape and typical range, helps find outliers and set risk thresholds."
+	)

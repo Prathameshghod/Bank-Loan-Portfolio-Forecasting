@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import plotly.express as px
 import plotly.graph_objects as go
-from utils import load_data, clean_data, get_summary_stats, plot_corr_heatmap, plot_distribution, plot_time_trend, kpi_cards, encode_categoricals
+from utils import load_data, clean_data, get_summary_stats, plot_corr_heatmap, plot_distribution, plot_time_trend, kpi_cards, encode_categoricals, explain_time_series, explain_histogram
 from models import arima_forecast, arima_diagnostics, logistic_regression_classification
 from reporting import export_csv, export_pdf
 import base64
@@ -52,7 +52,7 @@ if menu == 'Home':
         st.write('Navigate using the sidebar.')
         st.markdown('---')
         st.success('''**Key modules:**\n- EDA: Data analysis\n- ARIMA Forecast: Loan trends\n- Default ML: Default Risk\n- Dashboard: Portfolio KPIs and exports''')
-    # Removed the image in c2
+    # no image
 
 # --- EDA ---
 if menu == 'EDA':
@@ -63,12 +63,22 @@ if menu == 'EDA':
     st.divider()
     st.write('### Correlation Heatmap')
     st.pyplot(plot_corr_heatmap(df))
+    with st.expander('Explain this heatmap'):
+        st.markdown('- Title: Correlation Heatmap\n- X/Y axes: Numeric variables\n- Darker/lighter colors show stronger/weaker correlation; values near ±1 indicate strong relationships.\n- Use: Identify which features move together to avoid multicollinearity and to select meaningful predictors for models.')
     col_choice = st.multiselect('Select columns for distribution:', [x for x in ['Loan_Amount','Interest_Rate','Income','Credit_Score'] if x in df], default=['Loan_Amount','Credit_Score'])
     for col in col_choice:
         st.plotly_chart(plot_distribution(df, col),use_container_width=True)
+        with st.expander('Explain this chart'):
+            st.markdown(explain_histogram(df[col], f'{col} Distribution'))
     st.divider()
     st.write('### Loan Amount Trend')
     st.plotly_chart(plot_time_trend(df, 'Loan_Amount'), use_container_width=True)
+    # Explanation for time trend
+    temp = df.copy()
+    temp['Date_of_Issue'] = pd.to_datetime(temp['Date_of_Issue'])
+    temp = temp.groupby(pd.Grouper(key='Date_of_Issue', freq='M')).agg({'Loan_Amount': 'sum'}).reset_index()
+    with st.expander('Explain this chart'):
+        st.markdown(explain_time_series(temp, 'Date_of_Issue', 'Loan_Amount', 'Loan Amount Trend', currency=True))
     st.write('### NPA/Default Monthly Trend')
     try:
         npa = df.copy()
@@ -79,6 +89,8 @@ if menu == 'EDA':
         fig_npa.update_traces(mode='lines+markers', line_width=3)
         fig_npa.update_layout(yaxis_title='Default (%)', xaxis_title='Date', height=320, title=dict(x=0.5))
         st.plotly_chart(fig_npa, use_container_width=True)
+        with st.expander('Explain this chart'):
+            st.markdown(explain_time_series(npa_trend.rename(columns={'Default %':'Default_Percent'}), 'Date_of_Issue', 'Default_Percent', 'NPA/Default Monthly Trend', percent=True))
     except: st.warning("Can't plot NPA trend")
 
 # --- ARIMA FORECAST ---
@@ -90,6 +102,7 @@ if menu == 'ARIMA Forecasting':
     if not tcols:
         st.error('Required columns not in data!')
     else:
+        # Fixed heading instead of dropdown
         target_col = st.selectbox('Target Variable', tcols)
         periods = st.slider('Forecast Periods (months)',3,24,6)
         ts, forecast_df, _, resid, is_stationary = arima_forecast(df, target_col, periods)
@@ -110,6 +123,9 @@ if menu == 'ARIMA Forecasting':
         if target_col == 'Loan_Amount':
             fig.update_yaxes(tickprefix='₹', separatethousands=True)
         st.plotly_chart(fig, use_container_width=True)
+        with st.expander('Explain this chart'):
+            hist_df = pd.DataFrame({'Date': ts.index, 'Value': ts.values})
+            st.markdown(explain_time_series(hist_df, 'Date', 'Value', f'{target_col} (historical trend)', currency=(target_col=='Loan_Amount')))
         st.download_button('Download Forecast (CSV)',forecast_df.to_csv(index=False),file_name='forecast.csv')
 
 # --- DEFAULT PREDICTION ---
@@ -134,6 +150,8 @@ if menu == 'Default Prediction':
                 roc_fig.add_trace(go.Scatter(x=[0,1], y=[0,1], mode='lines', name='Random', line=dict(color='#aaaaaa', dash='dash')))
                 roc_fig.update_layout(template='plotly_dark', xaxis_title='False Positive Rate', yaxis_title='True Positive Rate', height=340, title='ROC Curve', title_x=0.5)
                 st.plotly_chart(roc_fig, use_container_width=True)
+                with st.expander('Explain this ROC curve'):
+                    st.markdown('- Title: ROC Curve shows model discrimination power.\n- X-axis: False Positive Rate; Y-axis: True Positive Rate.\n- Higher curve above diagonal means better model; AUC near 1.0 is strong.\n- Use: Decide threshold and compare models for default prediction.')
                 st.write('#### Feature Importance')
                 imp_df = pd.DataFrame({'Feature': feat_names, 'Coefficient': coef, 'AbsCoef': np.abs(coef), 'OddsRatio': odds})
                 imp_df = imp_df.sort_values('AbsCoef', ascending=True)
@@ -141,6 +159,8 @@ if menu == 'Default Prediction':
                 bar = go.Figure(go.Bar(x=imp_df['AbsCoef'], y=imp_df['Feature'], orientation='h', marker_color=colors, text=[f"coef={c:.3f}\nOR={o:.2f}" for c,o in zip(imp_df['Coefficient'], imp_df['OddsRatio'])], textposition='outside'))
                 bar.update_layout(template='plotly_dark', height=420, title='Standardized Coefficients (|coef|), color by sign', title_x=0.5, xaxis_title='|Coefficient|', yaxis_title='Feature', margin=dict(l=120, r=20, t=60, b=40))
                 st.plotly_chart(bar, use_container_width=True)
+                with st.expander('Explain this importance chart'):
+                    st.markdown('- Title: Feature Importance (Logistic coefficients).\n- Bars show size of effect; green raises default odds, red lowers.\n- Hover shows coefficient and odds ratio (exp(coef)).\n- Use: Identify drivers of default risk and guide credit policy or feature selection.')
 # --- COMBINED DASHBOARD ---
 if menu == 'Combined Dashboard':
     st.title('📊 Loan Portfolio Overview Dashboard')
@@ -164,12 +184,17 @@ if menu == 'Combined Dashboard':
     fig_dash.update_layout(template='plotly_dark', title='Actual vs Forecast', title_x=0.5, xaxis_title='Date', yaxis_title=target_col, height=420)
     fig_dash.update_yaxes(tickprefix='₹', separatethousands=True)
     st.plotly_chart(fig_dash, use_container_width=True)
+    with st.expander('Explain this chart'):
+        hist_df = pd.DataFrame({'Date': ts.index, 'Value': ts.values})
+        st.markdown(explain_time_series(hist_df, 'Date', 'Value', f'{target_col} (historical trend)', currency=(target_col=='Loan_Amount')))
     st.write('### Default Feature Importance')
     try:
         _,_,_,_,_,_,coef,feat_names,odds = logistic_regression_classification(df, ['Loan_Amount','Credit_Score','Interest_Rate','Income'], 'Loan_Status')
         imp_df = pd.DataFrame({'Feature': feat_names, 'Coefficient': coef, 'AbsCoef': np.abs(coef), 'OddsRatio': odds}).sort_values('AbsCoef', ascending=True)
         colors = ['#e74c3c' if v < 0 else '#2ecc71' for v in imp_df['Coefficient']]
         st.plotly_chart(go.Figure(go.Bar(x=imp_df['AbsCoef'], y=imp_df['Feature'], orientation='h', marker_color=colors, text=[f"coef={c:.3f}\nOR={o:.2f}" for c,o in zip(imp_df['Coefficient'], imp_df['OddsRatio'])], textposition='outside')).update_layout(template='plotly_dark', height=360, title='Standardized Coefficients (|coef|), color by sign', title_x=0.5, xaxis_title='|Coefficient|', yaxis_title='Feature', margin=dict(l=120, r=20, t=60, b=40)), use_container_width=True)
+        with st.expander('Explain this importance chart'):
+            st.markdown('- Title: Feature Importance (Logistic coefficients).\n- Bars show size of effect; green raises default odds, red lowers.\n- Hover shows coefficient and odds ratio (exp(coef)).\n- Use: Identify drivers of default risk and guide credit policy or feature selection.')
     except: st.warning('Default ML could not run.')
     st.write('### NPA/Default Monthly Trend')
     try:
@@ -181,6 +206,8 @@ if menu == 'Combined Dashboard':
         fig_npa2.update_traces(mode='lines+markers', line_width=3)
         fig_npa2.update_layout(yaxis_title='Default (%)', xaxis_title='Date', height=320, title='Default Ratio (%) by Month', title_x=0.5)
         st.plotly_chart(fig_npa2, use_container_width=True)
+        with st.expander('Explain this chart'):
+            st.markdown(explain_time_series(npa_trend.rename(columns={'Default %':'Default_Percent'}), 'Date_of_Issue', 'Default_Percent', 'NPA/Default Monthly Trend', percent=True))
     except: pass
     st.divider()
     st.write('### Download Portfolio KPIs')
